@@ -1,5 +1,6 @@
 #define LARGE_JSON_BUFFERS 1
 #define ARDUINOJSON_USE_LONG_LONG 1
+#define I2C_ADDR = 0x62
 
 #include <Ticker.h>
 #include <Arduino.h>
@@ -7,8 +8,7 @@
 
 // SCD40
 #include <Wire.h>
-#include <SensirionCore.h>
-#include <SensirionI2CScd4x.h>
+#include "SparkFun_SCD4x_Arduino_Library.h"
 
 // webthings
 #include <WebThingAdapter.h>
@@ -24,16 +24,18 @@
 
 #include "settings.h"
 
+
+
 WebThingAdapter* adapter;
 const char *airqTypes[] = {"AirQualitySensor", nullptr};
-ThingDevice airqSensor("airq", DEVICE_NAME, airqTypes);
+ThingDevice airqSensor(DEVICE_NAME, DEVICE_NAME, airqTypes);
 ThingProperty co2Prop("CO2", "CO2 ppm", NUMBER, "ConcentrationProperty");
 ThingProperty temperatureProp("Temperature", "Temperature", NUMBER, "TemperatureProperty");
 ThingProperty humidityProp("Humidity", "Humidity", NUMBER, "LevelProperty");
 
 Ticker checkPropTimer;
 
-SensirionI2CScd4x scd4x;
+SCD4x scd40sensor;
 
 void printUint16Hex(uint16_t value) {
     Serial.print(value < 4096 ? "0" : "");
@@ -51,39 +53,13 @@ void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2) {
 }
 
 void setupSCD40() {
-  Wire.begin();
+  Wire.begin();  
 
-  uint16_t error;
-  char errorMessage[256];
-
-  scd4x.begin(Wire);
-
-  // stop potentially previously started measurement
-  error = scd4x.stopPeriodicMeasurement();
-  if (error) {
-      Serial.print("Error trying to execute stopPeriodicMeasurement(): ");
-      errorToString(error, errorMessage, 256);
-      Serial.println(errorMessage);
-  }
-
-  uint16_t serial0;
-  uint16_t serial1;
-  uint16_t serial2;
-  error = scd4x.getSerialNumber(serial0, serial1, serial2);
-  if (error) {
-      Serial.print("Error trying to execute getSerialNumber(): ");
-      errorToString(error, errorMessage, 256);
-      Serial.println(errorMessage);
-  } else {
-      printSerialNumber(serial0, serial1, serial2);
-  }
-
-  // Start Measurement
-  error = scd4x.startPeriodicMeasurement();
-  if (error) {
-      Serial.print("Error trying to execute startPeriodicMeasurement(): ");
-      errorToString(error, errorMessage, 256);
-      Serial.println(errorMessage);
+  if (scd40sensor.begin() == false)
+  {
+    Serial.println(F("Sensor not detected. Please check wiring. Freezing..."));
+    while (1)
+      ;
   }
 }
 
@@ -142,60 +118,45 @@ void setupWiFi(String deviceName) {
 }
 
 void readSCD40Data() {
-  uint16_t error;
-  char errorMessage[256];
+  if (scd40sensor.readMeasurement())
+  {
+    uint16_t co2 = scd40sensor.getCO2();
+    float temperature = scd40sensor.getTemperature();
+    float humidity = scd40sensor.getHumidity();
+
+    Serial.println();
+
+    Serial.print(F("CO2(ppm):"));
+    Serial.print(co2);
+
+    Serial.print(F("\tTemperature(C):"));
+    Serial.print(temperature, 1);
+
+    Serial.print(F("\tHumidity(%RH):"));
+    Serial.print(humidity, 1);
+
+    Serial.println();
+
+    if (temperature != temperatureProp.getValue().number) {
+      ThingPropertyValue value;
+      value.number = temperature;
+      temperatureProp.setValue(value);
+    }
   
-  uint16_t co2 = 0;
-  float temperature = 0.0f;
-  float humidity = 0.0f;
-  uint16_t dataReady = false;
-  error = scd4x.getDataReadyStatus(dataReady);
-  if (error) {
-      Serial.print("Error trying to execute readMeasurement(): ");
-      errorToString(error, errorMessage, 256);
-      Serial.println(errorMessage);
-      return;
-  }
-  
-  error = scd4x.readMeasurement(co2, temperature, humidity);
-  if (error) {
-      Serial.print("Error trying to execute readMeasurement(): ");
-      errorToString(error, errorMessage, 256);
-      Serial.println(errorMessage);
-      return;
-  }
+    if (humidity != humidityProp.getValue().number) {
+      ThingPropertyValue value;
+      value.number = humidity;
+      humidityProp.setValue(value);
+    }
 
-  if (co2 == 0) {
-      Serial.println("Invalid sample detected, skipping.");
-      return;
+    if (co2 != co2Prop.getValue().number) {
+      ThingPropertyValue value;
+      value.number = co2;
+      co2Prop.setValue(value);
+    } 
   }
-
-  Serial.print("Co2:");
-  Serial.print(co2);
-  Serial.print("\t");
-  Serial.print("Temperature:");
-  Serial.print(temperature);
-  Serial.print("\t");
-  Serial.print("Humidity:");
-  Serial.println(humidity);
-
-  if (temperature != temperatureProp.getValue().number) {
-    ThingPropertyValue value;
-    value.number = temperature;
-    temperatureProp.setValue(value);
-  }
-  
-  if (humidity != humidityProp.getValue().number) {
-    ThingPropertyValue value;
-    value.number = humidity;
-    humidityProp.setValue(value);
-  }
-
-  if (co2 != co2Prop.getValue().number) {
-    ThingPropertyValue value;
-    value.number = co2;
-    co2Prop.setValue(value);
-  }
+  else
+    Serial.print(F("."));
 }
 
 void checkProp() {
@@ -237,9 +198,10 @@ void setup() {
 
   setupSCD40();
   
-  checkPropTimer.attach(1, checkProp);
+  checkPropTimer.attach(5, checkProp);
 }
 
 void loop() {
-  
+  // readSCD40Data();
+  // delay(3000);
 }
